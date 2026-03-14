@@ -508,6 +508,32 @@ def cli():
 
 # ── events ──────────────────────────────────────────────────────────────────────
 
+PRESETS: dict[str, list[str]] = {
+    "errors": [
+        "$metadata.level=error",
+    ],
+    "exceptions": [
+        "$workers.outcome=exception",
+    ],
+    "5xx": [
+        "$workers.event.response.status>=500",
+    ],
+    "4xx": [
+        "$workers.event.response.status>=400",
+        "$workers.event.response.status<500",
+    ],
+    "slow": [
+        "$workers.wallTimeMs>=1000",
+    ],
+    "cold": [
+        "$workers.coldStart=true",
+    ],
+    "cpu": [
+        "$workers.outcome@=exceededCpu,exceededMemory",
+    ],
+}
+
+
 @cli.command()
 @click.option("--since", "-s", default=None, help=SINCE_HELP)
 @click.option("--until", "-u", default=None, help=UNTIL_HELP)
@@ -517,12 +543,24 @@ def cli():
 @click.option("--limit", "-l", default=100, help="Max events to return (max 2000). Default: 100.")
 @click.option("--json-output", "-j", is_flag=True, help=JSON_HELP)
 @click.option("--or", "filter_or", is_flag=True, help=FILTER_OR_HELP)
-def events(since, until, filters, needle, worker, limit, json_output, filter_or):
+@click.option("--preset", "-p", type=click.Choice(list(PRESETS.keys())),
+              default=None, help="Preset filter: errors, exceptions, 5xx, 4xx, slow, cold, cpu.")
+def events(since, until, filters, needle, worker, limit, json_output, filter_or, preset):
     """Fetch log events.
 
     Retrieves individual log events ordered by timestamp. Each event
     includes metadata (level, message), worker info (script name,
     outcome, status), and custom fields.
+
+    \b
+    Presets (-p NAME):
+      errors       log level = error
+      exceptions   unhandled exceptions (outcome = exception)
+      5xx          HTTP 5xx responses
+      4xx          HTTP 4xx responses
+      slow         slow requests (wall time >= 1s)
+      cold         cold start requests
+      cpu          exceeded CPU or memory limits
 
     \b
     Filter operators:
@@ -556,6 +594,9 @@ def events(since, until, filters, needle, worker, limit, json_output, filter_or)
     Examples:
       cf-logs events                              # last hour
       cf-logs events -s 24h -w my-worker          # last 24h for a worker
+      cf-logs events -p errors -w my-api           # errors for a worker
+      cf-logs events -p 5xx -s 6h                 # 5xx in last 6 hours
+      cf-logs events -p slow -w my-api -j         # slow requests as JSON
       cf-logs events -f '$workers.outcome=exception'
       cf-logs events -f '$workers.event.response.status>=500'
       cf-logs events -n "error" -l 500 -j         # search + JSON output
@@ -563,7 +604,13 @@ def events(since, until, filters, needle, worker, limit, json_output, filter_or)
     """
     account_id, api_token = get_config()
     tf = parse_timeframe(since, until)
-    params = build_params(filters, worker, needle, filter_or)
+
+    # Merge preset filters with user filters
+    all_filters = list(filters)
+    if preset:
+        all_filters.extend(PRESETS[preset])
+
+    params = build_params(tuple(all_filters), worker, needle, filter_or)
 
     body = QueryBody(
         queryId=f"cli-{int(time.time())}",
