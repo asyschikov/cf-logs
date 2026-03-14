@@ -2,15 +2,23 @@
 
 CLI for querying Cloudflare Workers Observability logs.
 
-## Setup
-
-Requires Python 3.13+ and [uv](https://docs.astral.sh/uv/).
+## Install
 
 ```bash
-# Install dependencies
-uv sync
+pip install cf-logs
+```
 
-# Set credentials (or create a .env file)
+Or run directly without installing:
+
+```bash
+uvx cf-logs events -s 1h
+```
+
+## Setup
+
+Set your Cloudflare credentials (or create a `.env` file):
+
+```bash
 export CF_ACCOUNT_ID="your-account-id"
 export CF_API_TOKEN="your-api-token"
 ```
@@ -36,6 +44,93 @@ Run `cf-logs COMMAND --help` for detailed usage and examples.
 | `keys` | List available field keys |
 | `values` | List unique values for a field |
 | `destinations` | Manage OpenTelemetry export destinations |
+
+## Preset filters
+
+The `events` command has built-in presets for common debugging scenarios via `-p`:
+
+| Preset | What it filters |
+|--------|----------------|
+| `errors` | Log level = error |
+| `exceptions` | Unhandled exceptions (outcome = exception) |
+| `5xx` | HTTP 5xx responses |
+| `4xx` | HTTP 4xx responses |
+| `slow` | Slow requests (wall time >= 1s) |
+| `cold` | Cold start requests |
+| `cpu` | Exceeded CPU or memory limits |
+
+```bash
+cf-logs events -p errors                  # all errors in last hour
+cf-logs events -p 5xx -w my-api -s 24h    # 5xx for a worker, last 24h
+cf-logs events -p slow -j                 # slow requests as JSON
+cf-logs events -p exceptions -n "db"      # exceptions mentioning "db"
+```
+
+Presets combine with other filters, so `-p 5xx -w my-api -n "timeout"` all work together.
+
+## Common scenarios
+
+### Something is broken — what's happening?
+
+```bash
+# Quick look at errors
+cf-logs events -p errors -w my-api
+
+# Are there unhandled exceptions?
+cf-logs events -p exceptions -w my-api -s 30m
+
+# What's the error rate?
+cf-logs query -c COUNT -g '$workers.outcome' -w my-api -s 1h
+```
+
+### Investigating slow responses
+
+```bash
+# Find slow requests
+cf-logs events -p slow -w my-api
+
+# P99 and P50 latency
+cf-logs query -c P99:'$workers.wallTimeMs' -c P50:'$workers.wallTimeMs' -w my-api -s 6h
+
+# Latency by endpoint
+cf-logs query -c P99:'$workers.wallTimeMs' -g '$workers.event.request.url' -w my-api
+```
+
+### Monitoring a deploy
+
+```bash
+# Tail logs in real time
+cf-logs tail -w my-api
+
+# Tail only errors
+cf-logs tail -w my-api -f '$metadata.level=error'
+
+# Watch for 5xx
+cf-logs tail -w my-api -f '$workers.event.response.status>=500' -i 2
+```
+
+### Understanding traffic patterns
+
+```bash
+# Requests per worker
+cf-logs query -c COUNT -g '$workers.scriptName' -s 24h
+
+# Status code distribution
+cf-logs query -c COUNT -g '$workers.event.response.status' -w my-api
+
+# Traffic over time (5-min buckets)
+cf-logs query -c COUNT --granularity 300 -w my-api -s 6h -j
+```
+
+### Tracing a specific request
+
+```bash
+# View all logs for recent invocations
+cf-logs invocations -w my-api -s 15m
+
+# Find failed invocations
+cf-logs invocations -f '$workers.outcome=exception' -s 1h
+```
 
 ## Examples
 
@@ -87,16 +182,6 @@ cf-logs query -c COUNT -g '$workers.outcome' --granularity 300 -j
 
 # Only show groups with more than 100 events
 cf-logs query -c COUNT -g '$workers.scriptName' -H 'COUNT>100'
-```
-
-### Trace a request
-
-```bash
-# View logs grouped by invocation
-cf-logs invocations -w my-api -s 15m
-
-# Find failed invocations
-cf-logs invocations -f '$workers.outcome=exception' -s 1h
 ```
 
 ### Live tail
