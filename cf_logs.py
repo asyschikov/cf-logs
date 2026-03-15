@@ -13,7 +13,7 @@ from typing import Literal
 import click
 import httpx
 from dotenv import load_dotenv
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 load_dotenv()
 
@@ -74,6 +74,14 @@ class ViewType(str, Enum):
     invocations = "invocations"
 
 
+class ApiModel(BaseModel):
+    """Base for request bodies — always serializes with by_alias and exclude_none."""
+    def model_dump(self, **kwargs):
+        kwargs.setdefault("by_alias", True)
+        kwargs.setdefault("exclude_none", True)
+        return super().model_dump(**kwargs)
+
+
 class Filter(BaseModel):
     key: str
     operation: FilterOperation
@@ -121,16 +129,12 @@ class QueryParameters(BaseModel):
 
 
 class Timeframe(BaseModel):
-    from_: int
+    model_config = {"populate_by_name": True}
+    from_: int = Field(alias="from", serialization_alias="from")
     to: int
 
-    def model_dump(self, **kwargs):
-        d = super().model_dump(**kwargs)
-        d["from"] = d.pop("from_")
-        return d
 
-
-class QueryBody(BaseModel):
+class QueryBody(ApiModel):
     queryId: str
     view: ViewType = ViewType.events
     timeframe: Timeframe
@@ -143,7 +147,7 @@ class QueryBody(BaseModel):
     dry: bool | None = None
 
 
-class KeysRequestBody(BaseModel):
+class KeysRequestBody(ApiModel):
     timeframe: Timeframe
     filters: list[Filter] | None = None
     needle: Needle | None = None
@@ -151,7 +155,7 @@ class KeysRequestBody(BaseModel):
     limit: int | None = None
 
 
-class ValuesRequestBody(BaseModel):
+class ValuesRequestBody(ApiModel):
     timeframe: Timeframe
     key: str
     type: FieldType = FieldType.string
@@ -262,7 +266,7 @@ class ApiResponse(BaseModel):
     model_config = {"extra": "allow"}
 
 
-class Destination(BaseModel):
+class Destination(ApiModel):
     slug: str | None = None
     name: str | None = None
     type: str | None = None
@@ -414,7 +418,7 @@ def build_params(
 
 def do_query(account_id: str, api_token: str, body: QueryBody) -> ApiResponse:
     url = f"{API_BASE}/{account_id}/workers/observability/telemetry/query"
-    payload = body.model_dump(exclude_none=True)
+    payload = body.model_dump()
     resp = httpx.post(url, headers=api_headers(api_token), json=payload, timeout=60)
     if resp.status_code != 200:
         click.echo(f"HTTP {resp.status_code}: {resp.text}", err=True)
@@ -909,7 +913,7 @@ def keys(since, until, filters, worker, needle, key_needle, limit):
         limit=limit,
     )
 
-    data = do_api(account_id, api_token, "POST", "telemetry/keys", body.model_dump(exclude_none=True))
+    data = do_api(account_id, api_token, "POST", "telemetry/keys", body.model_dump())
 
     for key_info in data.result or []:
         ki = KeyInfo.model_validate(key_info)
@@ -955,7 +959,7 @@ def values(key, since, until, filters, worker, needle, limit, key_type):
         limit=limit,
     )
 
-    data = do_api(account_id, api_token, "POST", "telemetry/values", body.model_dump(exclude_none=True))
+    data = do_api(account_id, api_token, "POST", "telemetry/values", body.model_dump())
 
     for val_info in data.result or []:
         vi = ValueInfo.model_validate(val_info)
@@ -1027,7 +1031,7 @@ def destinations_create(name, dest_type, endpoint, headers_list, json_output):
             headers_dict[k.strip()] = v.strip()
         dest.headers = headers_dict
 
-    data = do_api(account_id, api_token, "POST", "destinations", dest.model_dump(exclude_none=True))
+    data = do_api(account_id, api_token, "POST", "destinations", dest.model_dump())
 
     if json_output:
         click.echo(json.dumps(data.result or {}, indent=2))
